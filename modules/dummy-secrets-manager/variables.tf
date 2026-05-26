@@ -4,7 +4,7 @@ variable "secret_name" {
 }
 
 variable "environment" {
-  description = "Environment name (dev, staging, prod) test 3"
+  description = "Environment name (dev, staging, prod) test 3."
   type        = string
 }
 
