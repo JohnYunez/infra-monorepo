@@ -1,0 +1,373 @@
+name: StackGen Module Publisher (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: "Comma-separated release tags (example: eks-cluster-v1.0.0,regional-eks/v0.1.0)"
+        required: true
+        type: string
+
+jobs:
+  publish-module:
+    name: Publish Modules to StackGen (Manual)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: tibdex/github-app-token@32691ba7c9e7063bd457bd8f2a5703138591fa58 #v1.9.0
+        with:
+          app_id: ${{ secrets.APP_ID_TOOLKIT_INNERSOURCE }}
+          private_key: ${{ secrets.APP_PRIVATEKEY_TOOLKIT_INNERSOURCE }}
+
+      - name: Set token for GitHub CLI
+        run: echo "GITHUB_TOKEN=${{ steps.generate_token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ env.GITHUB_TOKEN }}
+
+      - name: Install StackGen CLI
+        id: install_stackgen
+        env:
+          HOMEBREW_NO_ENV_HINTS: 1
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          STACKGEN_CLI_VERSION: ${{ vars.STACKGEN_CLI_VERSION }}
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 INSTALLING STACKGEN CLI"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+
+          BETA=""
+          if [ "${{ vars.STACKGEN_BETA }}" = "true" ]; then
+            BETA="-beta"
+          fi
+
+          if command -v stackgen${BETA} &> /dev/null; then
+            echo "✅ StackGen CLI (beta) already installed"
+            stackgen${BETA} version 2>/dev/null || echo "StackGen CLI (beta) found (version check not available)"
+            echo "stackgen_available=true" >> $GITHUB_OUTPUT
+          elif command -v stackgen &> /dev/null; then
+            echo "✅ StackGen CLI already installed (non-beta)"
+            stackgen version 2>/dev/null || echo "StackGen CLI found (version check not available)"
+            echo "stackgen_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "Installing StackGen CLI via Homebrew..."
+
+            if ! command -v git &> /dev/null; then
+              echo "Installing git..."
+              sudo apt-get update && sudo apt-get install -y git || \
+              sudo yum install -y git || \
+              brew install -q git || \
+              { echo "❌ Failed to install git. Please ensure git is available."; exit 1; }
+            fi
+            echo "✅ Git is available"
+
+            if ! command -v brew &> /dev/null; then
+              echo "Installing Homebrew..."
+              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null > /dev/null 2>&1
+              if [ $? -ne 0 ]; then
+                echo "❌ Failed to install Homebrew"
+                exit 1
+              fi
+
+              if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.bashrc
+                eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+                echo "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" >> $GITHUB_ENV
+              elif [ -d "/opt/homebrew" ]; then
+                echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.bashrc
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+                echo "$(/opt/homebrew/bin/brew shellenv)" >> $GITHUB_ENV
+              fi
+
+              if ! command -v brew &> /dev/null; then
+                echo "❌ Failed to install Homebrew"
+                exit 1
+              fi
+              echo "✅ Homebrew installed"
+            else
+              echo "✅ Homebrew is already installed"
+              if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+              elif [ -d "/opt/homebrew" ]; then
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+              fi
+            fi
+
+            if [ -n "$STACKGEN_CLI_VERSION" ]; then
+              echo "Installing StackGen CLI (beta) version $STACKGEN_CLI_VERSION..."
+
+              OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+              ARCH="$(uname -m)"
+              case "$ARCH" in
+                x86_64) ARCH="amd64" ;;
+                arm64|aarch64) ARCH="arm64" ;;
+                *) ARCH="amd64" ;;
+              esac
+
+              if echo "$STACKGEN_CLI_VERSION" | grep -q "rc"; then
+                VERSION_PATH="rc/${STACKGEN_CLI_VERSION}"
+              else
+                VERSION_PATH="${STACKGEN_CLI_VERSION}"
+              fi
+
+              VERSION_CLEAN=$(echo "$STACKGEN_CLI_VERSION" | sed 's/^v//')
+              DOWNLOAD_URL="https://releases.stackgen.com/binaries/stackgen-cli/${VERSION_PATH}/stackgen${BETA}_${VERSION_CLEAN}_${OS}_${ARCH}.tar.gz"
+
+              echo "Downloading from: $DOWNLOAD_URL"
+
+              TEMP_DIR=$(mktemp -d)
+              cd "$TEMP_DIR"
+              curl -fsSL "$DOWNLOAD_URL" -o stackgen${BETA}.tar.gz || {
+                echo "❌ Failed to download StackGen CLI (beta) version $STACKGEN_CLI_VERSION"
+                echo "Please verify the version exists at: https://releases.stackgen.com/binaries/stackgen-cli/"
+                exit 1
+              }
+
+              tar -xzf stackgen${BETA}.tar.gz || {
+                echo "❌ Failed to extract StackGen CLI (beta)"
+                exit 1
+              }
+
+              INSTALL_DIR="/usr/local/bin"
+              if [ ! -w "$INSTALL_DIR" ]; then
+                INSTALL_DIR="$HOME/.local/bin"
+                mkdir -p "$INSTALL_DIR"
+                echo "$INSTALL_DIR" >> $GITHUB_PATH
+              fi
+
+              chmod +x stackgen${BETA}
+              mv stackgen${BETA} "$INSTALL_DIR/stackgen${BETA}" || {
+                sudo mv stackgen${BETA} "$INSTALL_DIR/stackgen${BETA}" || {
+                  echo "❌ Failed to install StackGen CLI (beta) to $INSTALL_DIR"
+                  exit 1
+                }
+              }
+
+              cd -
+              rm -rf "$TEMP_DIR"
+              echo "✅ StackGen CLI (beta) version $STACKGEN_CLI_VERSION installed successfully"
+            else
+              echo "Installing StackGen CLI (beta) latest version from Homebrew tap..."
+              brew install -q stackgenhq/stackgen/stackgen${BETA} || {
+                echo "❌ Failed to install StackGen CLI (beta) via Homebrew"
+                echo "Attempting to add tap manually..."
+                brew tap -q stackgenhq/stackgen || exit 1
+                brew install -q stackgenhq/stackgen/stackgen${BETA} || exit 1
+              }
+            fi
+
+            if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+              eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            elif [ -d "/opt/homebrew" ]; then
+              eval "$(/opt/homebrew/bin/brew shellenv)"
+            fi
+
+            STACKGEN_PATH=$(which stackgen${BETA} 2>/dev/null || command -v stackgen${BETA} 2>/dev/null || echo "")
+
+            if [ -n "$STACKGEN_PATH" ] && command -v stackgen${BETA} &> /dev/null; then
+              echo "✅ StackGen CLI (beta) installed successfully"
+              echo "Location: $STACKGEN_PATH"
+              stackgen${BETA} version 2>/dev/null || echo "StackGen CLI (beta) installed (version check not available)"
+              echo "stackgen_available=true" >> $GITHUB_OUTPUT
+
+              if [ -d "/home/linuxbrew/.linuxbrew/bin" ]; then
+                echo "/home/linuxbrew/.linuxbrew/bin" >> $GITHUB_PATH
+              elif [ -d "/opt/homebrew/bin" ]; then
+                echo "/opt/homebrew/bin" >> $GITHUB_PATH
+              fi
+            else
+              echo "❌ Failed to install StackGen CLI"
+              echo "Please check the installation logs above for errors"
+              exit 1
+            fi
+          fi
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Upload custom module to StackGen
+        env:
+          RELEASES: ${{ inputs.releases }}
+          STACKGEN_PROVIDER: ${{ vars.STACKGEN_PROVIDER }}
+          SCM_TOKEN: ${{ env.GITHUB_TOKEN }}
+          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
+          STACKGEN_URL: ${{ vars.STACKGEN_URL }}
+          SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
+          SCM_TYPE: ${{ vars.SCM_TYPE }}
+          STACKGEN_LOG_LEVEL: ${{ vars.STACKGEN_LOG_LEVEL }}
+          STACKGEN_BETA: ${{ vars.STACKGEN_BETA }}
+        run: |
+          set -o pipefail
+
+          if [ -z "$STACKGEN_TOKEN" ]; then
+            echo "❌ STACKGEN_TOKEN is not set"
+            echo "Please set the STACKGEN_TOKEN secret in your repository settings"
+            echo "You can generate a token from: https://cloud.stackgen.com/project/personal/account-settings/pat"
+            exit 1
+          fi
+
+          if [ -z "$STACKGEN_URL" ]; then
+            echo "❌ STACKGEN_URL is not set"
+            echo "Please set the STACKGEN_URL variable in your repository settings"
+            echo "For example: https://acme.cloud.stackgen.com"
+            exit 1
+          fi
+
+          BETA=""
+          if [ "$STACKGEN_BETA" = "true" ]; then
+            BETA="-beta"
+          fi
+
+          STACKGEN_CMD="stackgen${BETA}"
+          if ! command -v "$STACKGEN_CMD" &> /dev/null; then
+            STACKGEN_CMD="stackgen"
+          fi
+
+          if ! command -v "$STACKGEN_CMD" &> /dev/null; then
+            echo "❌ StackGen CLI is not available in PATH"
+            exit 1
+          fi
+
+          if [ -z "$SCM_TYPE" ] || [ "$SCM_TYPE" = "auto" ]; then
+            if echo "$SCM_REPO" | grep -qiE "(github\.com|github\.|github\.io)"; then
+              SCM_TYPE="github"
+            elif echo "$SCM_REPO" | grep -qiE "(gitlab\.com|gitlab\.|gitlab\.io)"; then
+              SCM_TYPE="gitlab"
+            elif echo "$SCM_REPO" | grep -qiE "(dev\.azure\.com|azure\.com|visualstudio\.com)"; then
+              SCM_TYPE="ado"
+            elif echo "$SCM_REPO" | grep -qiE "(bitbucket\.org|bitbucket\.|atlassian\.com)"; then
+              SCM_TYPE="bitbucket"
+            else
+              SCM_TYPE="github"
+              echo "⚠️ Could not auto-detect SCM type from URL, defaulting to github"
+            fi
+            echo "✅ Auto-detected SCM_TYPE: $SCM_TYPE from URL: $SCM_REPO"
+          else
+            echo "✅ Using SCM_TYPE from repository variable: $SCM_TYPE"
+          fi
+
+          LOG_FLAG=""
+          if [ "$STACKGEN_LOG_LEVEL" = "2" ] || [ "${STACKGEN_LOG_LEVEL^^}" = "DEBUG" ]; then
+            LOG_FLAG="--log 2"
+          elif [ "$STACKGEN_LOG_LEVEL" = "3" ] || [ "${STACKGEN_LOG_LEVEL^^}" = "INFO" ]; then
+            LOG_FLAG="--log 3"
+          elif [ "$STACKGEN_LOG_LEVEL" = "4" ] || [ "${STACKGEN_LOG_LEVEL^^}" = "WARN" ]; then
+            LOG_FLAG="--log 4"
+          elif [ "$STACKGEN_LOG_LEVEL" = "5" ] || [ "${STACKGEN_LOG_LEVEL^^}" = "ERROR" ]; then
+            LOG_FLAG="--log 5"
+          fi
+
+          IFS=',' read -r -a RELEASE_ARRAY <<< "$RELEASES"
+
+          SUCCESS_COUNT=0
+          FAIL_COUNT=0
+          TOTAL_COUNT=0
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📤 UPLOADING CUSTOM MODULES TO STACKGEN"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Input releases: $RELEASES"
+          echo ""
+
+          for RAW_TAG in "${RELEASE_ARRAY[@]}"; do
+            TAG_NAME=$(echo "$RAW_TAG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+            if [ -z "$TAG_NAME" ]; then
+              continue
+            fi
+
+            TOTAL_COUNT=$((TOTAL_COUNT + 1))
+
+            echo ""
+            echo "──────────────────────────────────────────────────────"
+            echo "Processing release tag: $TAG_NAME"
+            echo "──────────────────────────────────────────────────────"
+
+            if [[ $TAG_NAME =~ ^(.+)[-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              MODULE_NAME="${BASH_REMATCH[1]}"
+              SEMANTIC_VERSION="${BASH_REMATCH[2]}"
+              MODULE_PATH="modules/${MODULE_NAME//_//}"
+              VERSION_NAME="v${SEMANTIC_VERSION}"
+            else
+              echo "❌ Invalid tag format: $TAG_NAME"
+              echo "Expected: <module-name>-v<semantic-version> or <module-name>/v<semantic-version>"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              continue
+            fi
+
+            if [ ! -d "$MODULE_PATH" ]; then
+              echo "❌ Module path does not exist: $MODULE_PATH"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              continue
+            fi
+
+            AWS_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+            GCP_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+            AZURE_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+
+            if [ "$AWS_COUNT" -gt "$GCP_COUNT" ] && [ "$AWS_COUNT" -gt "$AZURE_COUNT" ]; then
+              DETECTED_PROVIDER="aws"
+            elif [ "$GCP_COUNT" -gt "$AZURE_COUNT" ]; then
+              DETECTED_PROVIDER="gcp"
+            elif [ "$AZURE_COUNT" -gt 0 ]; then
+              DETECTED_PROVIDER="azure"
+            else
+              DETECTED_PROVIDER="aws"
+            fi
+
+            if [ -n "$STACKGEN_PROVIDER" ]; then
+              PROVIDER="$STACKGEN_PROVIDER"
+              echo "✅ Using provider from repository variable: $PROVIDER"
+            else
+              PROVIDER="$DETECTED_PROVIDER"
+              echo "✅ Using auto-detected provider: $PROVIDER"
+            fi
+
+            echo "Module:       $MODULE_NAME"
+            echo "Version:      $VERSION_NAME"
+            echo "Module Path:  $MODULE_PATH"
+            echo "SCM_REPO:     $SCM_REPO"
+            echo "SCM_TAG:      $TAG_NAME"
+            echo "SCM_TYPE:     $SCM_TYPE"
+            echo "Provider:     $PROVIDER"
+            echo ""
+
+            if "$STACKGEN_CMD" upload custom-modules \
+              -d "$MODULE_PATH" \
+              --provider "$PROVIDER" \
+              --overwrite-version \
+              --version "$VERSION_NAME" \
+              --name "$MODULE_NAME" \
+              ${LOG_FLAG}; then
+              echo "✅ Uploaded: $MODULE_NAME@$VERSION_NAME"
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            else
+              echo "❌ Upload failed: $MODULE_NAME@$VERSION_NAME"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+          done
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 SUMMARY"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Total processed: $TOTAL_COUNT"
+          echo "Succeeded:       $SUCCESS_COUNT"
+          echo "Failed:          $FAIL_COUNT"
+
+          if [ "$TOTAL_COUNT" -eq 0 ]; then
+            echo "❌ No valid release tags were provided"
+            exit 1
+          fi
+
+          if [ "$FAIL_COUNT" -gt 0 ]; then
+            echo "❌ One or more uploads failed"
+            exit 1
+          fi
+
+          echo "✅ All modules uploaded successfully"

@@ -1,9 +1,9 @@
 {
   "extends": "semantic-release-monorepo",
-  "tagFormat": "${process.env.folder}/v${version}",
+  "tagFormat": "${process.env.MODULE_NAME}/v${version}",
   "branches": [
     "main",
-    "master"
+    "trunk"
   ],
   "plugins": [
     [
@@ -20,8 +20,10 @@
           { "type": "test", "release": false },
           { "type": "build", "release": "patch" },
           { "type": "ci", "release": false },
+          { "type": "removed", "release": "patch" },
+          { "type": "deprecated", "release": "minor" },
+          { "type": "security", "release": "patch" },
           { "type": "chore", "release": false },
-          { "type": "revert", "release": "patch" },
           { "breaking": true, "release": "major" }
         ]
       }
@@ -37,8 +39,11 @@
             { "type": "docs", "section": "📚 Documentation" },
             { "type": "refactor", "section": "♻️ Code Refactoring" },
             { "type": "perf", "section": "⚡ Performance Improvements" },
-            { "type": "build", "section": "🏗️ Build System" },
-            { "type": "revert", "section": "⏪ Reverts" }
+            { "type": "test", "section": "🏗️ Module Testing" },
+            { "type": "removed", "section": "❌ Removed" },
+            { "type": "deprecated", "section": "⬇️ Deprecated Feature" },
+            { "type": "security", "section": "🔒 Security Fixed" },
+            { "breaking": true, "section": "⚠️ Breaking Changes" }
           ]
         }
       }
@@ -55,17 +60,17 @@
         "assets": [
           {
             "path": "CHANGELOG.md",
-            "label": "Secrets Manager Module Changelog"
+            "label": "Module Changelog"
           }
         ],
-        "releasedLabels": ["released", "secrets-manager"]
+        "releasedLabels": ["released", "${process.env.MODULE_NAME}"]
       }
     ],
     [
       "@semantic-release/git",
       {
         "assets": ["CHANGELOG.md"],
-        "message": "chore(secrets-manager): release ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+        "message": "chore(releasenotes): release ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ]
   ]
