@@ -14,21 +14,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Generate token
-        id: generate_token
-        uses: tibdex/github-app-token@32691ba7c9e7063bd457bd8f2a5703138591fa58 #v1.9.0
-        with:
-          app_id: ${{ secrets.APP_ID_TOOLKIT_INNERSOURCE }}
-          private_key: ${{ secrets.APP_PRIVATEKEY_TOOLKIT_INNERSOURCE }}
-
-      - name: Set token for GitHub CLI
-        run: echo "GITHUB_TOKEN=${{ steps.generate_token.outputs.token }}" >> $GITHUB_ENV
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ env.GITHUB_TOKEN }}
+          token: ${{ secrets.GHPAT }}
 
       - name: Install StackGen CLI
         id: install_stackgen
@@ -194,7 +184,7 @@ jobs:
         env:
           RELEASES: ${{ inputs.releases }}
           STACKGEN_PROVIDER: ${{ vars.STACKGEN_PROVIDER }}
-          SCM_TOKEN: ${{ env.GITHUB_TOKEN }}
+          SCM_TOKEN: ${{ secrets.GHPAT }}
           STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
           STACKGEN_URL: ${{ vars.STACKGEN_URL }}
           SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
